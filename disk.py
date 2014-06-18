@@ -1,20 +1,54 @@
 #!/usr/bin/env python
-# coding:utf-8
+# -*- coding: iso-8859-15 -*-
 
 from __future__ import with_statement
 
 import os
 import sys
 import errno
+import config
 
 from CoredataAPI import CoredataClient, Entity
 from fuse import FUSE, Operations, FuseOSError
+from tempfile import NamedTemporaryFile
 
 
-class Passthrough(Operations):
+class CoredataCache:
     def __init__(self):
-        self.current_space = ''
-        self.client = CoredataClient('<host>', ('<user>', '<pass>'))
+        # TODO: Read cache from disk.
+        # TODO: Check if there is new stuff in Coredata.
+        pass
+
+    def add(id, node):
+        pass
+
+    def get(id, node):
+        pass
+
+
+class Utils:
+    @staticmethod
+    def split_path(path):
+        path_items = filter(lambda x: x != '', path.split('/'))
+        space, project, filename = (None, None, None)
+        if len(path_items) == 0:
+            # This be ugly
+            space = None
+        elif len(path_items) == 1:
+            space = path_items[0]
+        elif len(path_items) == 2:
+            space, project = path_items
+        elif len(path_items) == 3:
+            space, project, filename = path_items
+        else:
+            print path_items
+            raise Exception('Unsecsessful in splitting up local path')
+        return (space, project, filename)
+
+
+class CoredataDisk(Operations):
+    def __init__(self, host, username, password):
+        self.client = CoredataClient(host, (username, password))
 
     def access(self, path, mode):
         """
@@ -42,21 +76,39 @@ class Passthrough(Operations):
         operating system can reason about the files on the system. ie. checking
         if files exists before trying to create them.
         """
-        # TODO: Implement this properly
-        title = os.path.basename(os.path.normpath(path))
-        dirs = filter(lambda x: x != '', path.split('/'))
-        entity = Entity.Projects
-        if len(dirs) == 1:
-            # We are on the first level so we are searching for a space
-            entity = Entity.Spaces
+        if path == '/':
+            return {
+                'st_ctime': 1402489488.4108176, 'st_mtime': 1402489488.4108176,
+                'st_nlink': 4, 'st_mode': 16893, 'st_size': 4096,
+                'st_gid': 1000, 'st_uid': 1000, 'st_atime': 1402383556.9949517}
 
-        entities = self.client.find(entity, {'title': title})
-        print title
-        if not entities and title not in ['.', '..', '']:
+        space, project, filename = Utils.split_path(path)
+
+        if filename:
+            entity = Entity.Files
+            title = filename
+        elif project:
+            entity = Entity.Projects
+            title = project
+        elif space:
+            entity = Entity.Spaces
+            title = space
+        else:
+            print space, project, filename, path
+            raise Exception('Failed figiuring out entity type')
+
+        # TODO: Cache this stuff.
+        entities = self.client.get(entity, search_terms={'title': title})
+        if not entities:
             # Raise a FUSE error if we cannot find the requested path, this
             # gets caught in the super class and properly handled.
             raise FuseOSError(errno.ENOENT)
-        print title
+        if entity == Entity.Files:
+            return {
+                'st_mode': 33204, 'st_ino': 4852076, 'st_dev': 36L,
+                'st_nlink': 1, 'st_uid': 1000, 'st_gid': 1000, 'st_size': 6905,
+                'st_atime': 1403002695, 'st_mtime': 1402520784,
+                'st_ctime': 1402520784}
         return {
             'st_ctime': 1402489488.4108176, 'st_mtime': 1402489488.4108176,
             'st_nlink': 4, 'st_mode': 16893, 'st_size': 4096, 'st_gid': 1000,
@@ -64,19 +116,29 @@ class Passthrough(Operations):
 
     def readdir(self, path, fh):
         """Read directory"""
-        space_name = path[1:]
-        import pdb; pdb.set_trace()
-        if space_name != '':
-            # Set the current space. Won't get set here unless user hits `ls`.
-            # TODO: Fix this.
-            space = self.client.find_one(
-                Entity.Spaces, {'title': space_name})
-            space_id = space['id']
-            self.current_space = space_id
-            docs = self.client.get(Entity.Spaces, space_id, Entity.Projects)
-        else:
+        space, project, filename = Utils.split_path(path)
+
+        if not space:
             docs = self.client.get(Entity.Spaces)
-        return ['.', '..'] + map(lambda x: x['title'], docs['objects'])
+            titles = map(lambda x: x['title'], docs)
+        elif filename:
+            raise NotImplementedError()
+        elif project:
+            project = self.client.get(Entity.Projects, limit=1, search_terms={
+                'title': project})
+            project_id = project[0]['id']
+            docs = self.client.get(
+                Entity.Projects, project_id, Entity.Files, limit=200)
+            titles = map(lambda x: x['filename'], docs)
+        elif space:
+            space = self.client.get(
+                Entity.Spaces, limit=1, search_terms={'title': space})
+            space_id = space[0]['id']
+            docs = self.client.get(
+                Entity.Spaces, space_id, Entity.Projects, limit=200)
+            titles = map(lambda x: x['title'], docs)
+
+        return ['.', '..'] + titles
 
     def readlink(self, path):
         pass
@@ -101,17 +163,12 @@ class Passthrough(Operations):
         title = os.path.basename(os.path.normpath(path))
 
         space_name = filter(lambda x: x != '', path.split('/'))[0]
-        if space_name:
-            # Set the current space. Won't get set here unless user hits `ls`.
-            # TODO: Fix this.
-            space = self.client.find_one(
-                Entity.Spaces, {'title': space_name})
-            space_id = space['id']
-            self.current_space = space_id
+        space = self.client.find_one(Entity.Spaces, {'title': space_name})
+        space_id = space['id']
 
         print 'Trying to make {title} in space {space}. Path is {path}'.format(
-            title=title, space=self.current_space, path=path)
-        self.client.create(Entity.Projects, {'space': self.current_space,
+            title=title, space=space_id, path=path)
+        self.client.create(Entity.Projects, {'space': space_id,
                                              'title': title})
 
     def statfs(self, path):
@@ -145,19 +202,25 @@ class Passthrough(Operations):
     def open(self, path, flags):
         """
         File open operation
-
-        No creation (O_CREAT, O_EXCL) and by default also no truncation
-        (O_TRUNC) flags will be passed to open(). If an application specifies
-        O_TRUNC, fuse first calls truncate() and then open(). Only if
-        'atomic_o_trunc' has been specified and kernel version is 2.6.24 or
-        later, O_TRUNC is passed on to open.
-
-        Unless the 'default_permissions' mount option is given, open should
-        check if the operation is permitted for the given flags. Optionally
-        open may also return an arbitrary filehandle in the fuse_file_info
-        structure, which will be passed to all file operations.
         """
-        pass
+        space, project, filename = Utils.split_path(path)
+        # Get the file from the API, saving to temp file
+        # Remove extension again
+        title, _ = filename.split('.')
+        # TODO: Make sure we only get one file back.
+        f = self.client.get(Entity.Files, limit=1,
+                            search_terms={'title': title})[0]
+        file_id = f['id']
+
+        # TODO: Add content in file endpoint and fetch it here.
+        content = self.client.get(Entity.Files, file_id, Entity.Content)
+
+        tmp_file = NamedTemporaryFile()
+        tmp_file.write(content)
+
+        # Open file descripton and pass the file descriptor
+        print 'Returning tmp file!'
+        return os.open(tmp_file.name, flags)
 
     def create(self, path, mode, fi=None):
         """
@@ -166,6 +229,7 @@ class Passthrough(Operations):
         If the file does not exist, first create it with the specified mode,
         and then open it.
         """
+        print 'Trying to creating file: ' + path
         pass
 
     def read(self, path, length, offset, fh):
@@ -178,7 +242,9 @@ class Passthrough(Operations):
         specified, in which case the return value of the read system call will
         reflect the return value of this operation.
         """
-        pass
+        print 'Trying to read file: ' + path
+        os.lseek(fh, offset, os.SEEK_SET)
+        return os.read(fh, length)
 
     def write(self, path, buf, offset, fh):
         pass
@@ -214,8 +280,10 @@ class Passthrough(Operations):
         pass
 
 
-def main(mountpoint):
-    FUSE(Passthrough(), mountpoint, foreground=True)
-
 if __name__ == '__main__':
-    main(sys.argv[1])
+    hostname = config.hostname
+    username = config.username
+    password = config.password
+    disk = CoredataDisk(hostname, username, password)
+    mountpoint = sys.argv[1]
+    FUSE(disk, mountpoint, foreground=True)
