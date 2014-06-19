@@ -1,6 +1,6 @@
 Pygments==1.6
 argparse==1.2.1
--e git+git@github.com:koddsson/coredata-python-client.git@f5816f9d8d63dfbf054922550fa691f876f8cc91#egg=coredata_python_client-master
+-e git+git@github.com:koddsson/coredata-python-client.git@f667312d1dcabcdabc6298563c8cabc27a3e732c#egg=coredata_python_client-master
 docopt==0.6.1
 enum34==1.0
 fancycompleter==0.4

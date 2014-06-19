@@ -1,14 +1,15 @@
-coredata-disk-linux
-===================
+Coredata Linux Virtual Disk
+===========================
 
 A very basic FUSE implementation against the coredata API.
 
-warning
--------
+Feel free to try it out and report back if it's missing features you'd like! 
+Features are slowly but surely being added.
 
-This is a very much a work in progress so try not to go to hard on it.
-
-TODO
-----
-- Pagination of projects in spaces.
-- Local cache
+Usage
+-----
+```
+mkvirtualenv coredata-linux-disk
+pip install -r requirements.txt
+python disk.py <mountpoint>
+```
