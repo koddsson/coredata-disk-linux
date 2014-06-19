@@ -11,19 +11,7 @@ import config
 from CoredataAPI import CoredataClient, Entity
 from fuse import FUSE, Operations, FuseOSError
 from tempfile import NamedTemporaryFile
-
-
-class CoredataCache:
-    def __init__(self):
-        # TODO: Read cache from disk.
-        # TODO: Check if there is new stuff in Coredata.
-        pass
-
-    def add(id, node):
-        pass
-
-    def get(id, node):
-        pass
+from enum import Enum
 
 
 class Utils:
@@ -46,9 +34,17 @@ class Utils:
         return (space, project, filename)
 
 
+class CacheStatus(Enum):
+    NotFound = 1
+    File = 2
+    Folder = 3
+
+
 class CoredataDisk(Operations):
     def __init__(self, host, username, password):
         self.client = CoredataClient(host, (username, password))
+        self.cache = {}
+        self.file_cache = {}
 
     def access(self, path, mode):
         """
@@ -76,6 +72,7 @@ class CoredataDisk(Operations):
         operating system can reason about the files on the system. ie. checking
         if files exists before trying to create them.
         """
+        print 'Getting attributes for {path}'.format(path=path.encode('utf8'))
         if path == '/':
             return {
                 'st_ctime': 1402489488.4108176, 'st_mtime': 1402489488.4108176,
@@ -83,6 +80,25 @@ class CoredataDisk(Operations):
                 'st_gid': 1000, 'st_uid': 1000, 'st_atime': 1402383556.9949517}
 
         space, project, filename = Utils.split_path(path)
+
+        if path in self.file_cache:
+            if self.file_cache[path] == CacheStatus.File:
+                return {
+                    'st_mode': 33204, 'st_ino': 4852076, 'st_dev': 36L,
+                    'st_nlink': 1, 'st_uid': 1000, 'st_gid': 1000,
+                    'st_size': 6905, 'st_atime': 1403002695,
+                    'st_mtime': 1402520784, 'st_ctime': 1402520784}
+            elif self.file_cache[path] == CacheStatus.Folder:
+                return {
+                    'st_ctime': 1402489488.4108176,
+                    'st_mtime': 1402489488.4108176, 'st_nlink': 4,
+                    'st_mode': 16893, 'st_size': 4096, 'st_gid': 1000,
+                    'st_uid': 1000, 'st_atime': 1402383556.9949517}
+            elif self.file_cache[path] == CacheStatus.NotFound:
+                raise FuseOSError(errno.ENOENT)
+            else:
+                raise Exception('Cache is dirty with: {dirty}'.format(
+                    self.file_cache[path]))
 
         if filename:
             entity = Entity.Files
@@ -95,20 +111,23 @@ class CoredataDisk(Operations):
             title = space
         else:
             print space, project, filename, path
-            raise Exception('Failed figiuring out entity type')
+            raise Exception('Failed figuring out entity type')
 
         # TODO: Cache this stuff.
         entities = self.client.get(entity, search_terms={'title': title})
         if not entities:
             # Raise a FUSE error if we cannot find the requested path, this
             # gets caught in the super class and properly handled.
+            self.file_cache[path] = CacheStatus.NotFound
             raise FuseOSError(errno.ENOENT)
         if entity == Entity.Files:
+            self.file_cache[path] = CacheStatus.File
             return {
                 'st_mode': 33204, 'st_ino': 4852076, 'st_dev': 36L,
                 'st_nlink': 1, 'st_uid': 1000, 'st_gid': 1000, 'st_size': 6905,
                 'st_atime': 1403002695, 'st_mtime': 1402520784,
                 'st_ctime': 1402520784}
+        self.file_cache[path] = CacheStatus.Folder
         return {
             'st_ctime': 1402489488.4108176, 'st_mtime': 1402489488.4108176,
             'st_nlink': 4, 'st_mode': 16893, 'st_size': 4096, 'st_gid': 1000,
@@ -116,7 +135,11 @@ class CoredataDisk(Operations):
 
     def readdir(self, path, fh):
         """Read directory"""
+        print 'Reading directory {path}'.format(path=path.encode('utf8'))
         space, project, filename = Utils.split_path(path)
+
+        if path in self.cache:
+            return ['.', '..'] + self.cache[path]
 
         if not space:
             docs = self.client.get(Entity.Spaces)
@@ -138,6 +161,7 @@ class CoredataDisk(Operations):
                 Entity.Spaces, space_id, Entity.Projects, limit=200)
             titles = map(lambda x: x['title'], docs)
 
+        self.cache[path] = titles
         return ['.', '..'] + titles
 
     def readlink(self, path):
