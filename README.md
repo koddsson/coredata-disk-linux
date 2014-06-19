@@ -8,6 +8,13 @@ Features are slowly but surely being added.
 
 Usage
 -----
+Create a `config.py` in the root of this project with the following info ...
+```
+hostname = 'https://<hostname>/'
+username = '<username>'
+password = '<password>'
+```
+... and then execute the following commands in the terminal
 ```
 mkvirtualenv coredata-linux-disk
 pip install -r requirements.txt
